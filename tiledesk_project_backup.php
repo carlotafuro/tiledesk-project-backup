@@ -8,6 +8,7 @@ $password = '***';
 $project_id = '***';
 
 $pages_log_file = __DIR__ . '/_log.json';
+$pages_log_array = array();
 
 ########################################################################################################################
 #
@@ -88,6 +89,8 @@ function endpoint_get_contents($endpoint, $use_include_path = false, $use_contex
 ########################################################################################################################
 function get_all_requests($project_id, $start_page = 0)
 {
+    global $pages_log_array;
+
     if (DEBUG) {
         echo "\n-------- Get all requests --------\n\n";
     }
@@ -123,7 +126,7 @@ function get_all_requests($project_id, $start_page = 0)
 
             $out_file_name = $out_dir . '/requests_page_' . $current_page . '.json';
 
-            if (file_exists($out_file_name)) {
+            if (DEBUG and file_exists($out_file_name)) {
                 fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
             }
 
@@ -133,7 +136,14 @@ function get_all_requests($project_id, $start_page = 0)
                 if (DEBUG) {
                     echo $counter++ . ') ' . $request->request_id . "\n";
                 }
-                get_a_request_by_id($project_id, $current_page, $request->request_id);
+                $request_status = get_a_request_by_id($project_id, $current_page, $request->request_id);
+
+                if ($request_status != '1000') { // 1000=closed | 100=pooled | 200=served
+                    if (DEBUG) {
+                        echo '- save unclosed request - page: ' . $current_page . ' - request_id: ' . $request->request_id . "\n";
+                    }
+                    update_pages_log_file('unclosed_requests', array('page' => $current_page, 'request_id' => $request->request_id), true);
+                }
             }
         } else {
 
@@ -175,13 +185,15 @@ function get_a_request_by_id($project_id, $current_page, $request_id)
 
     $out_file_name = $out_dir . '/' . $request_id . '.json';
 
-    if (file_exists($out_file_name)) {
+    if (DEBUG and file_exists($out_file_name)) {
         fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
     }
 
     file_put_contents($out_file_name, $json_response);
 
     get_request_messages($project_id, $current_page, $request_id);
+
+    return ($request_obj->status); // 1000=closed | 100=pooled | 200=served
 }
 
 ########################################################################################################################
@@ -210,7 +222,7 @@ function get_request_messages($project_id, $current_page, $request_id)
 
     $out_file_name = $out_dir . '/' . $request_id . '_messages.json';
 
-    if (file_exists($out_file_name)) {
+    if (DEBUG and file_exists($out_file_name)) {
         fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
     }
 
@@ -230,7 +242,7 @@ function get_request_messages($project_id, $current_page, $request_id)
 
                 $out_file_name = $out_dir . '/' . $request_id . '_message_' . $key . '_attach.' . $file_ext;
 
-                if (file_exists($out_file_name)) {
+                if (DEBUG and file_exists($out_file_name)) {
                     fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
                 }
 
@@ -263,7 +275,7 @@ function get_request_messages($project_id, $current_page, $request_id)
 
                 $out_file_name = $out_dir . '/' . $request_id . '_message_' . $key . '_attach.' . $file_ext;
 
-                if (file_exists($out_file_name)) {
+                if (DEBUG and file_exists($out_file_name)) {
                     fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
                 }
 
@@ -324,7 +336,7 @@ function get_all_leads($project_id, $start_page = 0)
 
             $out_file_name = $out_dir . '/leads_page_' . $current_page . '.json';
 
-            if (file_exists($out_file_name)) {
+            if (DEBUG and file_exists($out_file_name)) {
                 fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
             }
 
@@ -376,7 +388,7 @@ function get_a_lead_by_id($project_id, $current_page, $lead_id)
 
     $out_file_name = $out_dir . '/lead_page_' . $current_page . '_' . $lead_id . '.json';
 
-    if (file_exists($out_file_name)) {
+    if (DEBUG and file_exists($out_file_name)) {
         fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
     }
 
@@ -429,7 +441,7 @@ function get_all_activities($project_id, $start_page = 0)
 
             $out_file_name = $out_dir . '/activities_page_' . $current_page . '.json';
 
-            if (file_exists($out_file_name)) {
+            if (DEBUG and file_exists($out_file_name)) {
                 fwrite(STDERR, "\nDUPLICATE FILE: " . $out_file_name . "\n\n");
             }
 
@@ -471,24 +483,94 @@ function mime2ext($mime)
 
 ########################################################################################################################
 #
+#    Get old unclosed request
+#
+########################################################################################################################
+function get_old_unclosed_requests($project_id)
+{
+    global $pages_log_array;
+
+    $check_duplicate_request = array();
+
+    if (DEBUG) {
+        echo "\n-------- Get old unclosed request --------\n\n";
+    }
+
+    if (is_array($pages_log_array['unclosed_requests'])) {
+
+        $unclosed_requests = $pages_log_array['unclosed_requests'];
+
+        // unset $pages_log_array['unclosed_requests'] and delete it from log file
+        update_pages_log_file('unclosed_requests', null, null, 'delete');
+
+        foreach ($unclosed_requests as $request) {
+
+            if ( isset($check_duplicate_request[$request['request_id']]) ) {
+                continue;
+            } else {
+                $check_duplicate_request[$request['request_id']] = 1;
+            }
+
+            if (DEBUG) {
+                echo '- get old unclosed request - page: ' . $request['page'] . ' - request_id: ' . $request['request_id'] . "\n";
+            }
+
+            $request_status = get_a_request_by_id($project_id, $request['page'], $request['request_id']);
+
+            if ($request_status != '1000') { // 1000=closed | 100=pooled | 200=served
+                update_pages_log_file('unclosed_requests', array('page' => $request['page'], 'request_id' => $request['request_id']), true);
+                if (DEBUG) {
+                    echo '- save unclosed request - page: ' . $request['page'] . ' - request_id: ' . $request['request_id'] . "\n";
+                }
+            }
+        }
+    }
+}
+
+########################################################################################################################
+#
 #    Save current status
 #
 ########################################################################################################################
-function update_pages_log_file($key, $val)
+function update_pages_log_file($key, $val, $multiple_values = false, $action = 'add')
 {
     global $pages_log_file, $pages_log_array;
 
-    $pages_log_array[$key] = $val;
+    if ($action == 'add') {
+
+        if ($multiple_values) {
+            $pages_log_array[$key][] = $val;
+        } else {
+            $pages_log_array[$key] = $val;
+        }
+
+    } else if ($action == 'delete') {
+
+        unset($pages_log_array[$key]);
+    }
+
     file_put_contents($pages_log_file, json_encode($pages_log_array));
 }
 
-if (!file_exists($pages_log_file)) {
-    $pages_log_array = array('last_activities_page' => 0, 'last_leads_page' => 0, 'last_requests_page' => 0);
-    file_put_contents($pages_log_file, json_encode($pages_log_array));
-} else {
-    $pages_log_array = json_decode(file_get_contents($pages_log_file), true);
+########################################################################################################################
+#
+#    inizialize_pages_log_array()
+#
+########################################################################################################################
+function inizialize_pages_log_array()
+{
+    global $pages_log_file, $pages_log_array;
+
+    if (!file_exists($pages_log_file)) {
+        $pages_log_array = array('last_activities_page' => 0, 'last_leads_page' => 0, 'last_requests_page' => 0);
+        file_put_contents($pages_log_file, json_encode($pages_log_array));
+    } else {
+        $pages_log_array = json_decode(file_get_contents($pages_log_file), true);
+    }
 }
 
+inizialize_pages_log_array();
 get_all_activities($project_id, $pages_log_array['last_activities_page']);
 get_all_leads($project_id, $pages_log_array['last_leads_page']);
 get_all_requests($project_id, $pages_log_array['last_requests_page']);
+get_old_unclosed_requests($project_id);
